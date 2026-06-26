@@ -5249,6 +5249,18 @@ export const PlayerScreen = {
       return true;
     }
     this.playerBackNavigationInProgress = true;
+    // SAFETY NET: never let this flag stay stuck. If the back navigation does not
+    // complete (observed on Samsung Tizen, where the player is left mounted and the
+    // video keeps playing), every later Back press would early-return here and the
+    // user gets trapped in the player with no way out but powering the TV off.
+    // Auto-clear it shortly after so subsequent Back presses can retry the exit.
+    if (this.playerBackNavigationResetTimer) {
+      clearTimeout(this.playerBackNavigationResetTimer);
+    }
+    this.playerBackNavigationResetTimer = setTimeout(() => {
+      this.playerBackNavigationInProgress = false;
+      this.playerBackNavigationResetTimer = null;
+    }, 1200);
     Router.suppressNextPopstate?.(1500);
     Router.ignoreSinglePopstate?.();
     this.releaseCurrentEngineFsStreamBestEffort("back-to-stream", {
@@ -5274,6 +5286,37 @@ export const PlayerScreen = {
       isBackNavigation: true
     });
     return true;
+  },
+
+  forceExitPlayer() {
+    if (this.playerBackNavigationResetTimer) {
+      clearTimeout(this.playerBackNavigationResetTimer);
+      this.playerBackNavigationResetTimer = null;
+    }
+    this.playerBackNavigationInProgress = false;
+    // Stop playback directly — do not rely on the router calling cleanup().
+    try { PlayerController.stop(); } catch (error) {}
+    // Hide the player surface immediately so the user is visually freed even if
+    // the subsequent navigation does not complete.
+    try { if (this.container) { this.container.style.display = "none"; } } catch (error) {}
+    let target = "home";
+    let targetParams = {};
+    try {
+      if (this.params?.itemId) {
+        target = "detail";
+        targetParams = this.buildDetailRouteParamsFromPlayer();
+      }
+    } catch (error) {
+      target = "home";
+      targetParams = {};
+    }
+    try {
+      void Router.navigate(target, targetParams, {
+        skipStackPush: true,
+        replaceHistory: true,
+        isBackNavigation: true
+      });
+    } catch (error) {}
   },
 
   shouldShowNextEpisodeCard() {
@@ -13813,6 +13856,24 @@ export const PlayerScreen = {
   },
 
   consumeBackRequest() {
+    // ESCAPE HATCH: pressing Back repeatedly must always get the user out of the
+    // player. On Samsung Tizen the normal exit can fail (player left mounted, the
+    // video keeps playing and Back then does nothing), forcing a TV power-cycle.
+    // After a few consecutive Back presses, force a hard exit that does not depend
+    // on overlay state, the in-progress flag, or the router cleanup path.
+    const __backNow = Date.now();
+    if (__backNow - (this.lastConsumeBackAt || 0) < 2500) {
+      this.consecutiveBackCount = (this.consecutiveBackCount || 0) + 1;
+    } else {
+      this.consecutiveBackCount = 1;
+    }
+    this.lastConsumeBackAt = __backNow;
+    if (this.consecutiveBackCount >= 3) {
+      this.consecutiveBackCount = 0;
+      this.forceExitPlayer();
+      return true;
+    }
+
     if (this.isStartupErrorVisible()) {
       if (this.navigateBackToStreamScreen()) {
         return true;
@@ -14305,6 +14366,12 @@ export const PlayerScreen = {
   },
 
   cleanup() {
+    // Stop playback FIRST, then shield the rest of the teardown. On Samsung Tizen a
+    // step below can throw (e.g. EngineFS release when the local service is not
+    // running); if it propagated, the router aborted the navigation and the user
+    // was left stuck in the player with the video still playing.
+    try { PlayerController.stop(); } catch (error) {}
+    try {
     this.playerRouteActive = false;
     this.playerMountToken = Number(this.playerMountToken || 0) + 1;
     this.unbindVideoEvents();
@@ -14394,14 +14461,21 @@ export const PlayerScreen = {
     this.releaseStartupAudioGate({ resume: false });
     PlayerController.stop();
 
-    if (this.container) {
-      this.container.style.display = "none";
-      this.container.querySelector("#playerUiRoot")?.remove();
-      this.container.querySelector("#episodeSidePanel")?.remove();
+    } catch (error) {
+      try { console.warn("Player cleanup suppressed an error to keep navigation working", error); } catch (e) {}
+    } finally {
+      // ALWAYS hide/remove the player surface, even if the teardown above threw,
+      // so the player is never left rendered behind the next screen.
+      try {
+        if (this.container) {
+          this.container.style.display = "none";
+          this.container.querySelector("#playerUiRoot")?.remove();
+          this.container.querySelector("#episodeSidePanel")?.remove();
+        }
+        this.uiRefs = null;
+        this.lastUiTickState = null;
+      } catch (e) {}
     }
-    this.uiRefs = null;
-    this.lastUiTickState = null;
-
   }
 
 };

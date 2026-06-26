@@ -544,25 +544,15 @@ export const SearchScreen = {
 
   renderResultsOnly() {
     const content = this.container?.querySelector(".search-content");
-    const header = content?.querySelector(".search-header");
-    const input = this.container?.querySelector("#searchInput");
-    if (!content || !header || !input) {
+    const resultsPanel = content?.querySelector(".search-results-panel");
+    if (!content || !resultsPanel) {
       this.requestRender();
       return;
     }
-    const selectionSnapshot = getInputSelectionSnapshot(input);
-
-    while (header.nextSibling) {
-      header.nextSibling.remove();
-    }
-    content.insertAdjacentHTML("beforeend", this.renderRows());
+    resultsPanel.innerHTML = this.renderRows();
     ScreenUtils.indexFocusables(this.container);
     this.buildNavigationModel();
     this.bindActionEvents();
-    input.value = this.query || "";
-    input.focus?.();
-    this.focusNode(this.container?.querySelector(".focusable.focused") || null, input);
-    restoreInputSelection(input, selectionSnapshot);
     this.pendingAutoFocusResults = false;
   },
 
@@ -833,37 +823,26 @@ export const SearchScreen = {
           expanded: Boolean(this.sidebarExpanded),
           pillIconOnly: Boolean(this.pillIconOnly)
         })}
-        <main class="home-main search-content">
-          <section class="search-header${this.layoutPrefs?.searchDiscoverEnabled ? "" : " no-discover"}">
-            ${
-              this.layoutPrefs?.searchDiscoverEnabled
-                ? `
-              <button class="search-discover-btn focusable" data-action="openDiscover">
-                <span class="search-action-icon material-icons" aria-hidden="true">explore</span>
-              </button>
-            `
-                : ""
-            }
-            <button
-              class="search-voice-btn focusable${this.voiceSearchActive ? " listening" : ""}"
-              data-action="openVoice"
-              aria-label="Voice search"
-            >
-              <span class="search-action-icon material-icons" aria-hidden="true">mic</span>
-            </button>
-            <input
-              id="searchInput"
-              class="search-input-field focusable"
-              type="text"
-              data-action="searchInput"
-              autocomplete="off"
-              autocapitalize="off"
-              spellcheck="false"
-              placeholder="${escapeHtml(t("search_placeholder", {}, "Search movies & series"))}"
-              value="${escapeHtml(queryText)}"
-            />
+        <main class="home-main search-content search-content-split">
+          <section class="search-left-panel search-header">
+            <div class="search-query-display" id="searchQueryDisplay">${
+              queryText
+                ? escapeHtml(queryText)
+                : `<span class="search-query-placeholder">${escapeHtml(t("search_placeholder", {}, "Search movies & series"))}</span>`
+            }<span class="search-caret" aria-hidden="true"></span></div>
+            ${this.renderVirtualKeyboard()}
+            <div class="search-left-actions">
+              ${
+                this.layoutPrefs?.searchDiscoverEnabled
+                  ? `<button class="search-discover-btn focusable" data-action="openDiscover"><span class="search-action-icon material-icons" aria-hidden="true">explore</span></button>`
+                  : ""
+              }
+              <button class="search-voice-btn focusable${this.voiceSearchActive ? " listening" : ""}" data-action="openVoice" aria-label="Voice search"><span class="search-action-icon material-icons" aria-hidden="true">mic</span></button>
+            </div>
           </section>
-          ${this.renderRows()}
+          <div class="search-results-panel">
+            ${this.renderRows()}
+          </div>
         </main>
       </div>
     `;
@@ -1687,6 +1666,85 @@ export const SearchScreen = {
     return true;
   },
 
+  renderVirtualKeyboard() {
+    const rows = ["ABCDEF", "GHIJKL", "MNOPQR", "STUVWX", "YZ0123", "456789"];
+    const letterRows = rows
+      .map(
+        (row) =>
+          `<div class="search-vkey-row">${row
+            .split("")
+            .map(
+              (ch) =>
+                `<button class="search-vkey focusable" data-action="vkey" data-key="${ch}">${ch}</button>`
+            )
+            .join("")}</div>`
+      )
+      .join("");
+    const actionRow = `<div class="search-vkey-row search-vkey-actions">
+      <button class="search-vkey search-vkey-wide focusable" data-action="vkeyspace" aria-label="Space"><span class="material-icons" aria-hidden="true">space_bar</span></button>
+      <button class="search-vkey focusable" data-action="vkeyback" aria-label="Backspace"><span class="material-icons" aria-hidden="true">backspace</span></button>
+      <button class="search-vkey focusable" data-action="vkeyclear" aria-label="Clear"><span class="material-icons" aria-hidden="true">close</span></button>
+    </div>`;
+    return `<div class="search-vkeyboard">${letterRows}${actionRow}</div>`;
+  },
+
+  updateQueryDisplay() {
+    const display = this.container?.querySelector("#searchQueryDisplay");
+    if (!display) return;
+    const queryText = this.query || "";
+    display.innerHTML = queryText
+      ? `${escapeHtml(queryText)}<span class="search-caret" aria-hidden="true"></span>`
+      : `<span class="search-query-placeholder">${escapeHtml(t("search_placeholder", {}, "Search movies & series"))}</span><span class="search-caret" aria-hidden="true"></span>`;
+  },
+
+  applyVirtualKey(ch) {
+    if (!ch) return;
+    if (String(this.query || "").length >= 60) return;
+    this.query = String(this.query || "") + ch;
+    this.onVirtualQueryChange();
+  },
+
+  virtualBackspace() {
+    if (!this.query) return;
+    this.query = String(this.query).slice(0, -1);
+    this.onVirtualQueryChange();
+  },
+
+  virtualClear() {
+    if (!this.query) return;
+    this.query = "";
+    this.onVirtualQueryChange();
+  },
+
+  onVirtualQueryChange() {
+    this.updateQueryDisplay();
+    this.scheduleVirtualSearch();
+  },
+
+  scheduleVirtualSearch() {
+    this.cancelScheduledInputSearch();
+    const delay = String(this.query || "").trim().length >= 2 ? 320 : 140;
+    this.inputSearchTimer = setTimeout(() => {
+      this.inputSearchTimer = null;
+      void this.runVirtualSearch();
+    }, delay);
+  },
+
+  async runVirtualSearch() {
+    const nextQuery = String(this.query || "").trim();
+    const nextMode = nextQuery.length >= 2 ? "search" : "idle";
+    if (this.mode === nextMode && this.lastSubmittedQuery === nextQuery) {
+      return;
+    }
+    this.mode = nextMode;
+    this.lastSubmittedQuery = nextQuery;
+    this.loadToken = (this.loadToken || 0) + 1;
+    const token = this.loadToken;
+    this.rows = nextMode === "search" ? await this.searchRows(nextQuery, { token }) : [];
+    if (token !== this.loadToken) return;
+    this.renderResultsOnly();
+  },
+
   bindActionEvents() {
     this.container?.querySelectorAll("[data-action]").forEach((node) => {
       if (node.__boundActionListeners) return;
@@ -1709,6 +1767,10 @@ export const SearchScreen = {
     if (action === "openDiscover" && this.layoutPrefs?.searchDiscoverEnabled)
       Router.navigate("discover");
     if (action === "openVoice") this.handleVoiceSearch();
+    if (action === "vkey") this.applyVirtualKey(String(node.dataset.key || ""));
+    if (action === "vkeyspace") this.applyVirtualKey(" ");
+    if (action === "vkeyback") this.virtualBackspace();
+    if (action === "vkeyclear") this.virtualClear();
   },
 
   ensureVoiceRecognition() {
@@ -1914,6 +1976,28 @@ export const SearchScreen = {
         this.startPendingPosterHold(currentFocusedNode);
       }
       return;
+    }
+
+    // The on-screen keyboard (left panel) is not part of the header/results
+    // navigation model, so drive it with generic spatial navigation, and route
+    // focus crossings between keyboard, results and sidebar geometrically.
+    const focusedForKeyboard = this.container?.querySelector(".focusable.focused");
+    const keyboardPanel = focusedForKeyboard?.closest?.(".search-left-panel") || null;
+    const inResultsPanel = Boolean(focusedForKeyboard?.closest?.(".search-results-panel"));
+    if (keyboardPanel) {
+      if (code === 38 || code === 40) {
+        if (ScreenUtils.handleDpadNavigation(event, keyboardPanel)) return;
+      } else if (code === 39) {
+        if (ScreenUtils.handleDpadNavigation(event, this.container)) return;
+      } else if (code === 37) {
+        ScreenUtils.handleDpadNavigation(event, keyboardPanel);
+        const movedTo = this.container?.querySelector(".search-left-panel .focusable.focused");
+        if (movedTo && movedTo !== focusedForKeyboard) return;
+        await this.openSidebar();
+        return;
+      }
+    } else if (inResultsPanel && code === 37) {
+      if (ScreenUtils.handleDpadNavigation(event, this.container)) return;
     }
 
     const dpadResult = this.handleSearchDpad(event);

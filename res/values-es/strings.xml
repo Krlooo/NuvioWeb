@@ -76,6 +76,10 @@
     <string name="episodes_season">Temporada %1$d</string>
     <string name="episodes_specials">Especiales</string>
     <string name="episodes_episode">Episodio</string>
+    <string name="detail_season_count_one">%1$d temporada</string>
+    <string name="detail_season_count_other">%1$d temporadas</string>
+    <string name="detail_episode_count_one">%1$d episodio</string>
+    <string name="detail_episode_count_other">%1$d episodios</string>
     <string name="episodes_cd_watched">Visto</string>
     <string name="episodes_dialog_subtitle">Acciones del episodio</string>
     <string name="episodes_mark_watched">Marcar como visto</string>

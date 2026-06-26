@@ -2732,8 +2732,23 @@ export const MetaDetailsScreen = {
     const status = String(meta?.status || "")
       .trim()
       .toUpperCase();
+    let seasonEpisodeText = "";
+    if (isSeriesDetailMeta(this.meta, this.episodes) && this.episodes?.length) {
+      const seasonCount = new Set(this.episodes.map((episode) => episode.season)).size;
+      const episodeCount = this.episodes.length;
+      const seasonsStr =
+        seasonCount === 1
+          ? t("detail_season_count_one", { count: seasonCount }, "{{count}} season")
+          : t("detail_season_count_other", { count: seasonCount }, "{{count}} seasons");
+      const episodesStr =
+        episodeCount === 1
+          ? t("detail_episode_count_one", { count: episodeCount }, "{{count}} episode")
+          : t("detail_episode_count_other", { count: episodeCount }, "{{count}} episodes");
+      seasonEpisodeText = `${seasonsStr} · ${episodesStr}`;
+    }
     const primaryParts = [
       genresText ? `<span>${escapeHtml(genresText)}</span>` : "",
+      seasonEpisodeText ? `<span>${escapeHtml(seasonEpisodeText)}</span>` : "",
       yearText ? `<span>${escapeHtml(yearText)}</span>` : "",
       imdbText ? renderImdbBadge(imdbText) : ""
     ].filter(Boolean);
@@ -3414,7 +3429,7 @@ export const MetaDetailsScreen = {
             data-action="openEpisodeStreams"
             data-video-id="${escapeHtml(episode.id)}"
             data-episode-index="${absoluteIndex}">
-        <div class="series-episode-thumb"${episode.thumbnail ? ` style="background-image:url('${episode.thumbnail.replace(/'/g, "%27")}')"` : ""}>
+        <div class="series-episode-thumb"${episode.thumbnail ? ` data-thumb="${escapeHtml(episode.thumbnail)}"` : ""}>
           <div class="series-episode-overlay"></div>
           ${isWatched ? `<div class="series-episode-status complete">${renderWatchedBadgeGlyph()}</div>` : progressRatio < 0.02 ? `<div class="series-episode-status idle"></div>` : ""}
           ${isUnavailable ? `<div class="series-episode-unavailable">${escapeHtml(t("episodes_unavailable", {}, "Unavailable").toUpperCase())}</div>` : ""}
@@ -3430,25 +3445,48 @@ export const MetaDetailsScreen = {
     `;
   },
 
-  warmEpisodeThumbnails(episodes = [], startIndex = 0, endIndex = 0) {
-    if (!Array.isArray(episodes) || !episodes.length) {
-      return;
-    }
-    const from = Math.max(0, Math.min(episodes.length - 1, Number(startIndex || 0)));
-    const to = Math.max(from, Math.min(episodes.length - 1, Number(endIndex || 0)));
-    const prefetchStart = Math.max(0, from - EPISODE_VIRTUALIZATION_OVERSCAN);
-    const prefetchEnd = Math.min(episodes.length - 1, to + EPISODE_VIRTUALIZATION_OVERSCAN);
-    for (let index = prefetchStart; index <= prefetchEnd; index += 1) {
-      const thumbnail = String(episodes[index]?.thumbnail || "").trim();
-      if (!thumbnail || this.episodeThumbnailPrefetchCache.has(thumbnail)) {
-        continue;
+  warmEpisodeThumbnails() {
+    // Eager prefetch removed: episode thumbnails are now lazy-loaded on demand via
+    // IntersectionObserver (see observeEpisodeThumbnails). Eagerly decoding a whole
+    // season's thumbnails at once stalled low-end TVs when switching seasons.
+  },
+
+  applyEpisodeThumb(el) {
+    try {
+      if (!el) return;
+      const url = el.getAttribute("data-thumb");
+      if (!url) return;
+      el.style.backgroundImage = "url('" + String(url).replace(/'/g, "%27") + "')";
+      el.removeAttribute("data-thumb");
+    } catch (e) {}
+  },
+
+  observeEpisodeThumbnails() {
+    try {
+      const root = this.container;
+      if (!root) return;
+      const thumbs = Array.from(root.querySelectorAll(".series-episode-thumb[data-thumb]"));
+      if (!thumbs.length) return;
+      // Fallback for engines without IntersectionObserver: just load them all.
+      if (typeof IntersectionObserver !== "function") {
+        thumbs.forEach((el) => this.applyEpisodeThumb(el));
+        return;
       }
-      this.episodeThumbnailPrefetchCache.add(thumbnail);
-      const image = new Image();
-      image.decoding = "async";
-      image.loading = "eager";
-      image.src = thumbnail;
-    }
+      if (!this.episodeThumbObserver) {
+        this.episodeThumbObserver = new IntersectionObserver(
+          (entries) => {
+            entries.forEach((entry) => {
+              if (entry.isIntersecting) {
+                this.applyEpisodeThumb(entry.target);
+                try { this.episodeThumbObserver.unobserve(entry.target); } catch (e) {}
+              }
+            });
+          },
+          { root: null, rootMargin: "300px", threshold: 0.01 }
+        );
+      }
+      thumbs.forEach((el) => this.episodeThumbObserver.observe(el));
+    } catch (e) {}
   },
 
   renderEpisodeCards(preferredIndex = null) {
@@ -5082,6 +5120,7 @@ export const MetaDetailsScreen = {
   },
 
   bindDetailChrome() {
+    this.observeEpisodeThumbnails();
     const content = this.container?.querySelector(".series-detail-content");
     if (!content) {
       return;

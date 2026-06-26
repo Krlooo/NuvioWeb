@@ -168,6 +168,10 @@
     <string name="episodes_season">Season %1$d</string>
     <string name="episodes_specials">Specials</string>
     <string name="episodes_episode">Episode</string>
+    <string name="detail_season_count_one">%1$d season</string>
+    <string name="detail_season_count_other">%1$d seasons</string>
+    <string name="detail_episode_count_one">%1$d episode</string>
+    <string name="detail_episode_count_other">%1$d episodes</string>
     <string name="episodes_cd_watched">Watched</string>
     <string name="episodes_dialog_subtitle">Episode actions</string>
     <string name="episodes_mark_watched">Mark as watched</string>
